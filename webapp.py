@@ -6,6 +6,7 @@ import os
 import requests
 import yagmail
 import time
+import random
 from collections import Counter
 import arabic_reshaper
 from bidi.algorithm import get_display
@@ -52,21 +53,20 @@ def safe_text(text, is_arabic=False):
 def clean_number(num):
     return "{:,}".format(num)
 
-# --- STEP 3: DEEP SCAN ENGINE ---
+# --- STEP 3: DEEP SCAN ENGINE (HUMAN MODE) ---
 def get_instagram_data(username, session_user, session_pass):
     L = instaloader.Instaloader()
     
-    # LOGIN ATTEMPT
+    # LOGIN ATTEMPT (Silent)
     if session_user and session_pass:
         try:
             L.login(session_user, session_pass)
-        except Exception as e:
-            print(f"Login Warning: {e}")
+        except: pass 
 
     try:
         profile = instaloader.Profile.from_username(L.context, username)
         
-        limit = 50
+        limit = 40  # Safer limit
         posts_data = []
         likes = []
         comments = []
@@ -86,8 +86,12 @@ def get_instagram_data(username, session_user, session_pass):
             if post.caption: captions_len.append(len(post.caption))
             if post.is_video: vid_c += 1
             else: img_c += 1
+            
             if count >= limit: break
-            time.sleep(0.1)
+            
+            # --- THE FIX: RANDOM HUMAN DELAY ---
+            # Sleeps for 3 to 6 seconds to look exactly like a human on a phone
+            time.sleep(random.uniform(3, 6))
             
         if count == 0: return None
 
@@ -113,39 +117,53 @@ def get_instagram_data(username, session_user, session_pass):
             "count": count
         }
     except Exception as e:
-        st.error(f"Error scanning @{username}: {e}")
+        # DETECT 401 BLOCK
+        err_msg = str(e)
+        if "401" in err_msg or "wait" in err_msg.lower():
+            st.error(f"🚨 Instagram Speed Limit Hit: Please wait 15 minutes before scanning @{username} again.")
+        else:
+            st.error(f"Error scanning @{username}: {e}")
         return None
 
-def generate_charts(data):
-    # 1. Growth
-    plt.figure(figsize=(8, 3))
-    plt.plot(data['likes_history'][::-1], color='#D4AF37', linewidth=2)
-    plt.title("Engagement Velocity")
-    plt.axis('off')
+# --- PROFESSIONAL CHARTS THEME ---
+def generate_comparison_charts(data1, data2=None):
+    plt.style.use('bmh')
+    
+    # 1. Growth Chart
+    plt.figure(figsize=(10, 5))
+    plt.plot(data1['likes_history'][::-1], color='#D4AF37', linewidth=3, label=f"@{data1['username']}")
+    if data2:
+        plt.plot(data2['likes_history'][::-1], color='#800000', linewidth=3, label=f"@{data2['username']}")
+    
+    plt.title("Engagement Velocity (Last 40 Posts)", fontsize=14, fontweight='bold', pad=20)
+    plt.xlabel("Timeline", fontsize=10)
+    plt.ylabel("Likes", fontsize=10)
+    plt.legend(frameon=True, facecolor='white', framealpha=1)
+    plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
-    plt.savefig("chart_growth.png")
+    plt.savefig("chart_growth_vs.png", dpi=300)
     plt.close()
     
-    # 2. Mix
-    plt.figure(figsize=(4, 4))
-    plt.pie([max(1, data['img_count']), max(1, data['vid_count'])], labels=['Img', 'Vid'], 
-            colors=['#1a1a1a', '#D4AF37'], autopct='%1.1f%%')
-    plt.title("Content Mix")
+    # 2. Mix Chart
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+    
+    ax1.pie([max(1, data1['img_count']), max(1, data1['vid_count'])], labels=['Images', 'Reels'], 
+            colors=['#333333', '#D4AF37'], autopct='%1.1f%%', startangle=90)
+    ax1.set_title(f"@{data1['username']}", fontweight='bold')
+    
+    if data2:
+        ax2.pie([max(1, data2['img_count']), max(1, data2['vid_count'])], labels=['Images', 'Reels'], 
+                colors=['#333333', '#800000'], autopct='%1.1f%%', startangle=90)
+        ax2.set_title(f"@{data2['username']}", fontweight='bold')
+    else:
+        ax2.axis('off')
+        
+    plt.suptitle("Content Strategy Mix", fontsize=14, fontweight='bold')
     plt.tight_layout()
-    plt.savefig("chart_pie.png")
+    plt.savefig("chart_pie_vs.png", dpi=300)
     plt.close()
 
-    # 3. Days
-    plt.figure(figsize=(7, 3))
-    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    counts = [data['days'][d] for d in day_order]
-    plt.bar(day_order, counts, color='#D4AF37')
-    plt.axis('off')
-    plt.tight_layout()
-    plt.savefig("chart_days.png")
-    plt.close()
-
-# --- STEP 4: PDF GENERATOR ---
+# --- 8-PAGE PDF GENERATOR ---
 TRANSLATIONS = {
     'English 🇺🇸': {'h1': "WAR ROOM REPORT", 'sub': "Competitive Intelligence", 'rec': "Strategic Recommendations"},
     'Arabic 🇸🇦': {'h1': "تقرير غرفة العمليات", 'sub': "تحليل المنافسين", 'rec': "التوصيات الاستراتيجية"},
@@ -173,7 +191,7 @@ def create_pdf(data, comp, lang_key):
 
     txt = TRANSLATIONS.get(lang_key, TRANSLATIONS['English 🇺🇸'])
     
-    # --- PAGE 1: COVER (VS MODE) ---
+    # PAGE 1: COVER
     pdf.add_page()
     pdf.set_fill_color(10, 10, 10)
     pdf.rect(0, 0, 210, 297, 'F')
@@ -187,7 +205,6 @@ def create_pdf(data, comp, lang_key):
     pdf.cell(0, 10, safe_text(txt['sub'], USE_ARABIC), align='C', ln=True)
 
     if comp:
-        # VS DISPLAY
         pdf.set_y(80)
         pdf.set_font(F, 'B', 20)
         pdf.set_text_color(212, 175, 55)
@@ -195,7 +212,6 @@ def create_pdf(data, comp, lang_key):
         pdf.set_text_color(200, 50, 50)
         pdf.set_x(115)
         pdf.cell(95, 10, safe_text(f"@{comp['username']}", USE_ARABIC), align='C', ln=True)
-        
         pdf.set_text_color(255, 255, 255)
         pdf.set_font(F, 'B', 40)
         pdf.set_y(75)
@@ -225,13 +241,11 @@ def create_pdf(data, comp, lang_key):
         pdf.set_font(F, 'B', 24)
         pdf.cell(0, 10, safe_text(f"@{data['username']}", USE_ARABIC), align='C', ln=True)
 
-    # --- PAGES 2-8: DEEP DIVE ---
-    # We define the sections for the full report
+    # PAGES 2-8
     sections = [
         ("Key Metrics Dashboard", data['followers'], f"{data['eng_rate']}%", f"${data['price_high']}"),
-        ("Growth & Velocity", "chart_growth.png"),
-        ("Content Strategy Mix", "chart_pie.png"),
-        ("Posting Habits", "chart_days.png"),
+        ("Growth & Velocity", "chart_growth_vs.png"),
+        ("Content Strategy Mix", "chart_pie_vs.png"),
         ("Hashtag Intelligence", data['top_hashtags']),
         ("Strategic Recommendations", "recs"),
         ("Final Verdict", data['eng_rate'])
@@ -239,11 +253,8 @@ def create_pdf(data, comp, lang_key):
     
     for title, content1, *rest in sections:
         pdf.add_page()
-        # White Background
         pdf.set_fill_color(255, 255, 255)
         pdf.rect(0, 0, 210, 297, 'F')
-        
-        # Black Header Strip
         pdf.set_fill_color(20, 20, 20)
         pdf.rect(0, 0, 210, 30, 'F')
         pdf.set_text_color(212, 175, 55)
@@ -264,27 +275,20 @@ def create_pdf(data, comp, lang_key):
             pdf.cell(60, 20, str(rest[0]), align='C')
             pdf.set_text_color(0, 150, 0)
             pdf.cell(60, 20, str(rest[1]), align='C')
-            
         elif title == "Hashtag Intelligence":
             pdf.set_font(F, '', 12)
             for tag, count in content1:
                 pdf.cell(0, 10, safe_text(f"#{tag} ({count})", USE_ARABIC), ln=True)
-        
         elif title == "Strategic Recommendations":
             pdf.set_font(F, '', 12)
             recs = []
-            if data['eng_rate'] < 2:
-                recs.append("❌ Low Engagement. Recommendation: Increase Reels frequency to 3x/week.")
+            if data['eng_rate'] < 2: recs.append("❌ Low Engagement. Recommendation: Increase Reels frequency to 3x/week.")
             if comp and comp['followers'] > data['followers']:
                 diff = comp['followers'] - data['followers']
                 recs.append(f"⚠️ Competitor Gap: @{comp['username']} leads by {clean_number(diff)} followers.")
                 recs.append("-> Action: Analyze their Hashtag strategy.")
             if not recs: recs.append("✅ Account is performing at Top Tier levels.")
-            
-            for r in recs:
-                pdf.multi_cell(0, 10, safe_text(r, USE_ARABIC))
-                pdf.ln(5)
-
+            for r in recs: pdf.multi_cell(0, 10, safe_text(r, USE_ARABIC)); pdf.ln(5)
         elif title == "Final Verdict":
             score = 100
             if content1 < 2: score -= 20
@@ -292,10 +296,8 @@ def create_pdf(data, comp, lang_key):
             if score > 80: pdf.set_text_color(0, 150, 0)
             else: pdf.set_text_color(200, 0, 0)
             pdf.cell(0, 50, f"{score}/100", align='C')
-
         elif isinstance(content1, str) and ".png" in content1:
-            if os.path.exists(content1):
-                pdf.image(content1, x=10, w=190)
+            if os.path.exists(content1): pdf.image(content1, x=10, w=190)
 
     filename = f"{data['username']}_WarReport.pdf"
     pdf.output(filename)
@@ -315,21 +317,12 @@ st.set_page_config(page_title="TripleS Analysis", page_icon="📈")
 st.markdown("""
 <style>
     .stApp { background-color: #000000; color: #D4AF37; }
-    input { color: #000000 !important; }
+    input { background-color: #ffffff !important; color: #000000 !important; }
     div[data-testid="stForm"] { border: 2px solid #D4AF37; padding: 20px; border-radius: 10px; }
     section[data-testid="stSidebar"] label { color: #ffffff !important; font-weight: bold; font-size: 14px; }
     section[data-testid="stSidebar"] input { background-color: #ffffff !important; color: #000000 !important; }
-    div.stButton > button {
-        background-color: #D4AF37 !important;
-        color: #000000 !important;
-        font-weight: bold;
-        border: none;
-        width: 100%;
-    }
-    button[aria-label="Show password"] {
-        background-color: transparent !important;
-        color: #000000 !important;
-    }
+    div.stButton > button { background-color: #D4AF37 !important; color: #000000 !important; font-weight: bold; border: none; width: 100%; }
+    button[aria-label="Show password"] { background-color: transparent !important; color: #000000 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -349,8 +342,13 @@ if login_btn:
             st.toast(f"✅ Authenticated: {user_session}")
             st.sidebar.success("✅ Connected")
         except Exception as e:
-            st.error(f"Login Blocked: {e}")
-            st.sidebar.warning("Connection Failed")
+            err_msg = str(e)
+            if "checkpoint" in err_msg.lower() or "challenge" in err_msg.lower():
+                 st.error("⚠️ Instagram Security Check Required")
+                 st.sidebar.error("Please open Instagram on your phone/browser, approve 'This was me', then click Login again.")
+            else:
+                 st.error(f"Login Blocked: {e}")
+                 st.sidebar.warning("Connection Failed")
     else:
         st.sidebar.warning("Enter details first")
 
@@ -376,18 +374,21 @@ with st.form("run"):
         btn = st.form_submit_button("🚀 Generate PDF 🚀", use_container_width=True)
 
 if btn and user:
-    # 1. SCAN
+    # 1. SCAN MAIN USER
     with st.spinner(f"Scanning @{user}..."):
         data = get_instagram_data(user, user_session, pass_session)
-        if data: generate_charts(data)
+        if data: generate_comparison_charts(data, None)
         
+    # 2. SCAN COMPETITOR
     comp_data = None
     if data and comp:
         with st.spinner(f"Scanning Competitor @{comp}..."):
-            time.sleep(2)
+            # EXTRA SAFETY DELAY FOR COMPETITOR SCAN
+            time.sleep(3) 
             comp_data = get_instagram_data(comp, user_session, pass_session)
+            if comp_data: generate_comparison_charts(data, comp_data)
             
-    # 2. GENERATE
+    # 3. GENERATE REPORT
     if data:
         pdf = create_pdf(data, comp_data, lang)
         if email: send_email_report(email, pdf)
